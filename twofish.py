@@ -2,6 +2,8 @@
 #Class: CS 4980 Cryptography 
 #Name: Fatima Kammona
 
+import numpy as np
+
 def input_from_user_key(prompt):
     while True:
         user_input = input(prompt).replace(" ", "").lower()  # Remove spaces and convert to lowercase
@@ -25,8 +27,14 @@ def key_schedule_s(key):
     key_array = [key[i:i+2] for i in range(0, len(key), 2)]
     key_length = int(len(key_array) / 2) 
 
-    key_first_half = key_array[:key_length]
-    key_second_half = key_array[key_length:]
+    key_first_half = np.array(key_array[:key_length])
+    key_second_half = np.array(key_array[key_length:])
+    
+   # A = np.array([[1, 3, 5, 7, 9], [2, 4, 6, 8, 10]])
+
+   # B = np.array([[1, 2, 3, 4, 5], [5, 4, 3, 2, 1]])
+
+  #  print(np.multiply(A,B))
 
 def key_schedule(key):
     key_schedule_s(key)
