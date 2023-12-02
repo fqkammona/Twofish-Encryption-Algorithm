@@ -107,14 +107,73 @@ def galois_multiply(a, b):
         b >>= 1
     return p % 256
 
-def key_schedule(key):
+def h_function(input_value, key_portion, key_length, q_table, MDS_matrix):
+    # Split input_value into 4 bytes
+    input_bytes = [(input_value >> (8 * i)) & 0xFF for i in range(4)]
+
+    # Apply the q-tables and key bytes based on the key length
+    if key_length >= 4:
+        input_bytes = [
+            q_table[0 if i == 0 or i == 3 else 1][input_bytes[i]] ^ key_portion[12 + i] 
+            for i in range(4)
+        ]
+
+    if key_length >= 3:
+        input_bytes = [
+            q_table[0 if i == 0 or i == 1 else 1][input_bytes[i]] ^ key_portion[8 + i] 
+            for i in range(4)
+        ]
+
+    input_bytes = [
+        q_table[1 if i % 2 == 0 else 0][q_table[1 if i < 2 else 0][input_bytes[i]] ^ key_portion[4 + i]] 
+        ^ key_portion[i] for i in range(4)
+    ]
+
+    # Perform the MDS matrix multiplication
+    mds_output = [0] * 4
+    for i in range(4):
+        for j in range(4):
+            mds_output[i] ^= galois_multiply(MDS_matrix[i][j], input_bytes[j])
+
+    # Combine mds_output into a 32-bit word
+    return sum(mds_output[i] << (8 * i) for i in range(4))
+
+def key_schedule(key, g_q, MDS_matrix):
+    key_length = len(key) // 8  # Determine key length in words (32-bit words)
     m_even, m_odd = split_key(key)
     s_boxes = rs_matrix_multiply(key)
+    subkeys = [0] * 40  # Initialize subkeys array for the 40 round keys
 
-'''The Main Function'''
+    # Key-dependent S-boxes
+    for i in range(4):
+        s_boxes[i] = h_function(m_even[i], s_boxes, key_length, g_q, MDS_matrix)
+
+    # Create the 40 round keys
+    for i in range(20):
+        # Round constants for even and odd subkeys
+        round_constant_even = 2 * i * 0x01010101
+        round_constant_odd = (2 * i + 1) * 0x01010101
+        
+        # Calculate round subkeys
+        subkeys[2 * i] = h_function(round_constant_even, m_even, key_length, g_q, MDS_matrix)
+        subkeys[2 * i + 1] = h_function(round_constant_odd, m_odd, key_length, g_q, MDS_matrix)
+
+        # Rotate the odd subkey left by 8 bits
+        subkeys[2 * i + 1] = ((subkeys[2 * i + 1] << 8) & 0xFFFFFFFF) | (subkeys[2 * i + 1] >> 24)
+
+    return s_boxes, subkeys
+
+def print_key_schedule(s_boxes, subkeys):
+    print("S-box keys:")
+    for i, s_box in enumerate(s_boxes):
+        print(f"S{i}: {s_box:08X}")
+
+    print("\nRound subkeys:")
+    for i in range(0, 40, 2):
+        print(f"K{i}: {subkeys[i]:08X}, K{i+1}: {subkeys[i+1]:08X}")
+
 if __name__ == "__main__":
     key = input_from_user_key("Enter a hex string of 128, 192, or 256 bits in length: ")
-    print(f"key {key}")
-
-
-                
+    g_q = twofish_init()
+    s_boxes, subkeys = key_schedule(key, g_q, MDS_matrix)
+    print_key_schedule(s_boxes, subkeys)
