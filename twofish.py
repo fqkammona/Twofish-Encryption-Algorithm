@@ -85,17 +85,21 @@ def rs_matrix_multiply(key_bytes):
         key_bytes = [int(key_bytes[i:i+2], 16) for i in range(0, len(key_bytes), 2)]
 
     # Initialize the S-boxes
-    s_boxes = [0] * 4  # Four 32-bit S-boxes
+    s_boxes = [0] * 4  # 4 32-bit S-boxes
 
     # Perform RS matrix multiplication
     for i in range(4):  # 4 rows in RS matrix
         for j in range(8):  # 8 columns (key bytes)
+           # print(RS_matrix[i][j])
+           # print(key_bytes[j])
             result = galois_multiply(RS_matrix[i][j], key_bytes[j])
+           # print(result)
             s_boxes[i] ^= result
-
+            #print(s_boxes[i])
+        
     return s_boxes
 
-'''Multiply two numbers in the GF(2^8) field. '''
+'''Multiply two numbers in the GF(2^8) field. ''' 
 def galois_multiply(a, b):
     p = 0
     for counter in range(8):
@@ -134,13 +138,13 @@ def h_function(input_value, key_portion, key_length, q_table, MDS_matrix):
         ^ (key_portion[i] if len(key_portion) > i else 0) for i in range(4)
     ]
 
-    # Perform the MDS matrix multiplication
+    # MDS matrix multiplication
     mds_output = [0] * 4
     for i in range(4):
         for j in range(4):
             mds_output[i] ^= galois_multiply(MDS_matrix[i][j], input_bytes[j])
 
-    # Combine mds_output into a 32-bit word
+    # puts mds_output into a 32-bit word
     return sum(mds_output[i] << (8 * i) for i in range(4))
 
 
