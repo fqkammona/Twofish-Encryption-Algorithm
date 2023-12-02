@@ -4,6 +4,63 @@
 
 import numpy as np
 
+'''Initialize the RS and MDS matrices. They are used for the key schedule and the h function.'''
+RS_matrix = np.array([
+        [0x01, 0xA4, 0x55, 0x87, 0x5A, 0x58, 0xDB, 0x9E],
+        [0xA4, 0x56, 0x82, 0xF3, 0x1E, 0xC6, 0x68, 0xE5],
+        [0x02, 0xA1, 0xFC, 0xC1, 0x47, 0xAE, 0x3D, 0x19],
+        [0xA4, 0x55, 0x87, 0x5A, 0x58, 0xDB, 0x9E, 0x03]
+    ])
+
+MDS_matrix = np.array([
+        [0x01, 0xEF, 0x5B, 0x5B],
+        [0x5B, 0xEF, 0xEF, 0x01],
+        [0xEF, 0x5B, 0x01, 0xEF],
+        [0xEF, 0x01, 0xEF, 0x5B]
+    ])
+
+'''This function initializes the g_q array, which is use in the 'h' function. 
+The array is created using the provided permutation tables (t). '''
+def twofish_init():
+    t = [
+        [
+            [0x8, 0x1, 0x7, 0xd, 0x6, 0xf, 0x3, 0x2, 0x0, 0xb, 0x5, 0x9, 0xe, 0xc, 0xa, 0x4],
+            [0xe, 0xc, 0xb, 0x8, 0x1, 0x2, 0x3, 0x5, 0xf, 0x4, 0xa, 0x6, 0x7, 0x0, 0x9, 0xd],
+            [0xb, 0xa, 0x5, 0xe, 0x6, 0xd, 0x9, 0x0, 0xc, 0x8, 0xf, 0x3, 0x2, 0x4, 0x7, 0x1],
+            [0xd, 0x7, 0xf, 0x4, 0x1, 0x2, 0x6, 0xe, 0x9, 0xb, 0x3, 0x0, 0x8, 0x5, 0xc, 0xa]
+        ],
+        [
+            [0x2, 0x8, 0xb, 0xd, 0xf, 0x7, 0x6, 0xe, 0x3, 0x1, 0x9, 0x4, 0x0, 0xa, 0xc, 0x5],
+            [0x1, 0xe, 0x2, 0xb, 0x4, 0xc, 0x3, 0x7, 0x6, 0xd, 0xa, 0x5, 0xf, 0x9, 0x0, 0x8],
+            [0x4, 0xc, 0x7, 0x5, 0x1, 0x6, 0x9, 0xa, 0x0, 0xe, 0xd, 0x8, 0x2, 0xb, 0x3, 0xf],
+            [0xb, 0x9, 0x5, 0x1, 0xc, 0x3, 0xd, 0xe, 0x6, 0x4, 0x7, 0xf, 0x2, 0x0, 0x8, 0xa]
+        ]
+    ]
+    
+    g_q = [[0] * 256 for _ in range(2)]
+    for i in range(256):
+        x = i
+        a = [0] * 5
+        b = [0] * 5
+
+        a[0] = x // 16
+        b[0] = x % 16
+        a[1] = a[0] ^ b[0]
+        b[1] = (a[0] ^ ((b[0] >> 1) | ((b[0] & 1) << 3)) ^ (8 * a[0])) % 16
+
+        for j in range(2):
+            a[2] = t[j][0][a[1]]
+            b[2] = t[j][1][b[1]]
+            a[3] = a[2] ^ b[2]
+            b[3] = (a[2] ^ ((b[2] >> 1) | ((b[2] & 1) << 3)) ^ (8 * a[2])) % 16
+            a[4] = t[j][2][a[3]]
+            b[4] = t[j][3][b[3]]
+            g_q[j][x] = (b[4] << 4) + a[4]
+
+    return g_q
+
+'''THis function prompts the user and verifiyes the input key
+ is either 128, 192 or 256 bits in length. '''
 def input_from_user_key(prompt):
     while True:
         user_input = input(prompt).replace(" ", "").lower()  # Remove spaces and convert to lowercase
@@ -15,53 +72,29 @@ def input_from_user_key(prompt):
         else:
             print("Error: Please enter a valid hex string of 128, 192, or 256 bits in length.")
 
-# This function creates the s0 and s1 boxes
-# Calls create_s0_s1
-# takes the user input key 
-def key_schedule_s(key):
-    # Break up the key by twos and convert to integers
-    key_array = [key[i:i+2] for i in range(0, len(key), 2)]
-    half_length = int(len(key_array)/ 2) 
+'''Splits the key into even and odd 32-bit words.'''
+def split_key(key):
+    key_bytes = bytes.fromhex(key)
+    m_even = [int.from_bytes(key_bytes[i:i+4], 'little') for i in range(0, len(key_bytes), 8)]
+    m_odd = [int.from_bytes(key_bytes[i:i+4], 'little') for i in range(4, len(key_bytes), 8)]
+    return m_even, m_odd
 
-    key_first_half = key_array[:half_length]
-    key_second_half = key_array[half_length:]
+def rs_matrix_multiply(key_bytes):
+    # Make sures the key bytes are in the correct format (list of integers)
+    if isinstance(key_bytes, str):
+        key_bytes = [int(key_bytes[i:i+2], 16) for i in range(0, len(key_bytes), 2)]
 
-    size = int(half_length / 4)
-    s0_matrix = create_s0_s1(key_first_half, size)
-    s1_matrix = create_s0_s1(key_second_half, size)
+    # Initialize the S-boxes
+    s_boxes = [0] * 4  # Four 32-bit S-boxes
 
-    print(s0_matrix)
-    print(s1_matrix)
-    
-# Takes a part of the key that is being multiplied 
-# Takes the size needed to reshape 
-#  Size is either 2,3,4
-def create_s0_s1(key_section, size):
-    RS_matrix = np.array([
-        [0x01, 0xA4, 0x55, 0x87, 0x5A, 0x58, 0xDB, 0x9E],
-        [0xA4, 0x56, 0x82, 0xF3, 0x1E, 0xC6, 0x68, 0xE5],
-        [0x02, 0xA1, 0xFC, 0xC1, 0x47, 0xAE, 0x3D, 0x19],
-        [0xA4, 0x55, 0x87, 0x5A, 0x58, 0xDB, 0x9E, 0x03]
-    ])
+    # Perform RS matrix multiplication
+    for i in range(4):  # 4 rows in RS matrix
+        for j in range(8):  # 8 columns (key bytes)
+            s_boxes[i] ^= galois_multiply(RS_matrix[i][j], key_bytes[j])
 
-    second_matrix = np.array([int(value, 16) for value in key_section]).reshape(4, size) 
-    # reshape(4, 3) method in NumPy is used to change the shape of an array. 
-    # When you apply reshape(4, 3) to an array, 
-    # you are transforming the array into a new shape with 4 rows and 3 columns
-    # hexadecimal(base16) 
-    expanded_second_matrix = np.repeat(second_matrix, len(key_section), axis=1)
-    
-    # Perform element-wise multiplication in GF(2^8)
-    gf_result_matrix = np.zeros_like(RS_matrix)
+    return s_boxes
 
-    for i in range(RS_matrix.shape[0]):
-        for j in range(RS_matrix.shape[1]):
-            # Performing GF(2^8) multiplication with the corresponding element in the expanded second matrix
-            gf_result_matrix[i, j] = galois_multiply(RS_matrix[i, j], expanded_second_matrix[i, j % 2])
-
-    return gf_result_matrix
-
-# Multiply two numbers in the GF(2^8) field. 
+'''Multiply two numbers in the GF(2^8) field. '''
 def galois_multiply(a, b):
     p = 0
     for counter in range(8):
@@ -70,15 +103,18 @@ def galois_multiply(a, b):
         carry = a & 0x80
         a <<= 1
         if carry:
-            a ^= 0x1b # This is the irreducible polynomial (x^8 + x^4 + x^3 + x + 1)
+            a ^= 0xAD # irreducible polynomial (x^8 + x^6 + x^3 + x^2 + 1)
         b >>= 1
     return p % 256
 
 def key_schedule(key):
-    key_schedule_s(key)
+    m_even, m_odd = split_key(key)
+    s_boxes = rs_matrix_multiply(key)
 
+'''The Main Function'''
 if __name__ == "__main__":
     key = input_from_user_key("Enter a hex string of 128, 192, or 256 bits in length: ")
     print(f"key {key}")
-    key_schedule(key)
-    
+
+
+                
