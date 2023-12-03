@@ -72,6 +72,16 @@ def input_from_user_key(prompt):
         else:
             print("Error: Please enter a valid hex string of 128, 192, or 256 bits in length.")
 
+def rotl(x, r):
+    return ((x << r) | (x >> (32 - r))) & 0xFFFFFFFF
+
+def rotr(x, r):
+    return ((x >> r) | (x << (32 - r))) & 0xFFFFFFFF
+
+def rotr4(x, r):
+    return ((x >> r) | ((x & (1 << (r - 1))) << (4 - r))) & 0xF
+
+
 '''Splits the key into even and odd 32-bit words.'''
 def split_key(key):
     key_bytes = bytes.fromhex(key)
@@ -80,55 +90,27 @@ def split_key(key):
     return m_even, m_odd
 
 
-def test_split_key():
-    test_key = "0123456789ABCDEFFEDCBA98765432100011223344556677"
-    
-    # Expected output (in little-endian format)
-    expected_even = [0x67452301, 0x98BADCFE, 0x33221100]  # Reversed order
-    expected_odd = [0xEFCDAB89, 0x10325476, 0x77665544]   # Reversed order
-
-    # Split the key using your function
-    even, odd = split_key(test_key)
-
-    # Compare the results
-    assert even == expected_even, f"Even words do not match. Expected {expected_even}, got {even}"
-    assert odd == expected_odd, f"Odd words do not match. Expected {expected_odd}, got {odd}"
-
-    print("Test passed: split_key function works correctly.")
-
 def rs_matrix_multiply(key_bytes):
+    # Make sure the key bytes are in the correct format (list of integers)
     if isinstance(key_bytes, str):
         key_bytes = [int(key_bytes[i:i+2], 16) for i in range(0, len(key_bytes), 2)]
 
-    # Initialize the S-boxes
-    s_boxes = [0] * 4  # Four 32-bit S-boxes
+    # Initialize the S-boxes as a 4x8 matrix
+    s_boxes = [[0 for _ in range(8)] for _ in range(4)]  # 4 rows, 8 columns
 
     # Perform RS matrix multiplication
     for i in range(4):  # 4 rows in RS matrix
-        for j in range(len(key_bytes)):  # Adjust to the length of key_bytes
-            result = galois_multiply(RS_matrix[i][j % 8], key_bytes[j])  # Use modulo for key_bytes longer than 8
-            s_boxes[i] ^= result
+        for j in range(8):  # 8 columns (key bytes)
+            #print(RS_matrix[i][j])
+            #print(key_bytes[j])
+            result = galois_multiply(RS_matrix[i][j], key_bytes[j])
+            #print(f"Here: {result}")
+            s_boxes[i][j] = result
+
+        # After each row is filled, print the row
+        print("Row", i, ":", s_boxes[i])
 
     return s_boxes
-
-
-def test_rs_matrix_multiply():
-    test_key = "0123456789ABCDEF"  # A simple 128-bit test key
-    expected_s_boxes = [0x12345678, 0x9ABCDEF0, 0x11223344, 0x55667788]  # Placeholder values
-
-    # Convert the test key to bytes
-    key_bytes = [int(test_key[i:i+2], 16) for i in range(0, len(test_key), 2)]
-
-    # Get the S-boxes using RS matrix multiplication
-    s_boxes = rs_matrix_multiply(key_bytes)
-
-    # Compare each S-box with the expected value
-    for i, s_box in enumerate(s_boxes):
-        assert s_box == expected_s_boxes[i], f"RS Matrix multiplication failed for S{i}. Expected: {expected_s_boxes[i]:08X}, got: {s_box:08X}"
-
-    print("RS Matrix multiplication test passed.")
-
-
 
 '''Multiply two numbers in the GF(2^8) field. '''
 def galois_multiply(a, b):
@@ -147,42 +129,40 @@ def galois_multiply(a, b):
 
     return p
 
-
-def test_galois_multiply():
-    # Test cases as (a, b, expected_result)
-    test_cases = [
-        (0x57, 0x83, 0xc1),  # Example values from GF(2^8)
-        (0x01, 0x01, 0x01),  # Testing with identity
-        (0x00, 0x83, 0x00),  # Testing with zero
-        # Add more test cases here
-    ]
-
-    for a, b, expected in test_cases:
-        result = galois_multiply(a, b)
-        assert result == expected, f"Failed for galois_multiply({a}, {b}): expected {expected}, got {result}"
-
-
 def h_function(input_value, key_portion, key_length, q_table, MDS_matrix):
     # Split input_value into 4 bytes
     input_bytes = [(input_value >> (8 * i)) & 0xFF for i in range(4)]
 
-    # Apply the q-tables and key bytes based on the key length
+    # Intermediate transformations with rotr4 and q-tables
+    transformed_bytes = [0] * 4
+    for i in range(4):
+        a0 = input_bytes[i] // 16
+        b0 = input_bytes[i] % 16
+        a1 = a0 ^ b0
+        b1 = rotr4(b0, 1) ^ (8 * a0) % 16
+
+        a2 = q_table[0][a1]
+        b2 = q_table[1][b1]
+        a3 = a2 ^ b2
+        b3 = rotr4(b2, 1) ^ (8 * a2) % 16
+
+        transformed_bytes[i] = 16 * q_table[1][b3] + q_table[0][a3]
+
+    # Apply the key portion based on the key length
     if key_length >= 4:
-        input_bytes = [
-            q_table[0 if i == 0 or i == 3 else 1][input_bytes[i]] ^ (key_portion[12 + i] if len(key_portion) > 12 + i else 0)
-            for i in range(4)
-        ]
+        transformed_bytes = [transformed_bytes[i] ^ key_portion[i + 12] for i in range(4)]
 
     if key_length >= 3:
-        input_bytes = [
-            q_table[0 if i == 0 or i == 1 else 1][input_bytes[i]] ^ (key_portion[8 + i] if len(key_portion) > 8 + i else 0)
-            for i in range(4)
-        ]
+        transformed_bytes = [transformed_bytes[i] ^ key_portion[i + 8] for i in range(4)]
 
+    # Further transformations
     input_bytes = [
-        q_table[1 if i % 2 == 0 else 0][q_table[1 if i < 2 else 0][input_bytes[i]] ^ (key_portion[4 + i] if len(key_portion) > 4 + i else 0)]
-        ^ (key_portion[i] if len(key_portion) > i else 0) for i in range(4)
+        q_table[1 if i % 2 == 0 else 0][q_table[1 if i < 2 else 0][transformed_bytes[i]] ^ key_portion[i + 4]]
+        ^ key_portion[i] for i in range(4)
     ]
+
+    # Print input_bytes before MDS matrix multiplication
+    print("input_bytes before MDS matrix multiplication:", input_bytes)
 
     # Perform the MDS matrix multiplication
     mds_output = [0] * 4
@@ -194,36 +174,49 @@ def h_function(input_value, key_portion, key_length, q_table, MDS_matrix):
     return sum(mds_output[i] << (8 * i) for i in range(4))
 
 
+'''This function is responsible for generating the round keys.'''
 def key_schedule(key, g_q, MDS_matrix):
     key_length = len(key) // 8  # Determine key length in words (32-bit words)
     m_even, m_odd = split_key(key)
+    print("Length of m_even:", len(m_even))
+    print("Length of m_odd:", len(m_odd))
     s_boxes = rs_matrix_multiply(key)
+    subkeys = [0] * 48  # Extend to 48 subkeys for whitening
 
-    print_key_schedule(m_even, m_odd, s_boxes)
+    for i in range(40):
+        print(f"Round {i}: Length of m_even = {len(m_even)}, Length of m_odd = {len(m_odd)}")
+    # rest of the loop code...
+
     # Key-dependent S-boxes
     for i in range(min(4, len(m_even))):
-        s_boxes[i] = h_function(m_even[i], s_boxes, key_length, g_q, MDS_matrix)
+        s_box_row = h_function(m_even[i], s_boxes[i], key_length, g_q, MDS_matrix)
+        print(f"s_box_row before update (row {i}): {s_box_row:08X}")
 
-    return s_boxes
+        # Ensure that only the lower 32 bits are used to update the s_boxes
+        s_box_row &= 0xFFFFFFFF  # Mask to ensure it's a 32-bit value
 
 
-def print_key_schedule(m_even, m_odd, s_boxes):
+def print_inputKey_Sboxes(m_even, m_odd, s_boxes):
     print("Input key\t\t\t\tS-Box Key")
     print("Odd\t\tEven")
-    for i in range(len(s_boxes)):
-        odd_hex = f"{m_odd[i]:08X}" if i < len(m_odd) else "--------"
-        even_hex = f"{m_even[i]:08X}" if i < len(m_even) else "--------"
-        s_box_hex = f"{s_boxes[i]:08X}" if i < len(s_boxes) else "--------"
+    for i in range(len(m_even)):  # Assuming m_even and m_odd are of the same length
+        odd_hex = f"{m_odd[i]:08X}"
+        even_hex = f"{m_even[i]:08X}"
+        s_box_hex = " ".join([f"{byte:02X}" for byte in s_boxes[i][:4]])
         print(f"{odd_hex}\t{even_hex} -> {s_box_hex}")
+
+def print_key_schedule(subkeys):
+    print("\nRound subkeys:")
+    for i in range(0, 40, 2):
+        print(f"K{i}: {subkeys[i]:08X}, K{i+1}: {subkeys[i+1]:08X}")
+
 
 if __name__ == "__main__":
     key = input_from_user_key("Enter a hex string of 128, 192, or 256 bits in length: ")
     g_q = twofish_init()
     m_even, m_odd = split_key(key)  # Assuming this gives you the split key parts
-    s_boxes = key_schedule(key, g_q, MDS_matrix)
-    print_key_schedule(m_even, m_odd, s_boxes)
-    # Run the test
-
-    # Run the test
-    test_split_key()
+    s_boxes, subkeys = key_schedule(key, g_q, MDS_matrix)
+    print_inputKey_Sboxes(m_even, m_odd, s_boxes)
+    print_key_schedule(subkeys)
+ 
   

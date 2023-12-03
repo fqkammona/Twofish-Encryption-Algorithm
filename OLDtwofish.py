@@ -85,4 +85,47 @@ if __name__ == "__main__":
     key = input_from_user_key("Enter a hex string of 128, 192, or 256 bits in length: ")
     print(f"key {key}")
     key_schedule(key)
+    def test_rs_matrix_multiply():
+    test_key = "0123456789ABCDEF"  # A simple 128-bit test key
+    expected_s_boxes = [0x12345678, 0x9ABCDEF0, 0x11223344, 0x55667788]  # Placeholder values
+
+    # Convert the test key to bytes
+    key_bytes = [int(test_key[i:i+2], 16) for i in range(0, len(test_key), 2)]
+
+    # Get the S-boxes using RS matrix multiplication
+    s_boxes = rs_matrix_multiply(key_bytes)
+
+    # Compare each S-box with the expected value
+    for i, s_box in enumerate(s_boxes):
+        assert s_box == expected_s_boxes[i], f"RS Matrix multiplication failed for S{i}. Expected: {expected_s_boxes[i]:08X}, got: {s_box:08X}"
+
+    print("RS Matrix multiplication test passed.")
+
+    def test_galois_multiply():
+    # Test cases as (a, b, expected_result)
+    test_cases = [
+        (0x57, 0x83, 0xc1),  # Example values from GF(2^8)
+        (0x01, 0x01, 0x01),  # Testing with identity
+        (0x00, 0x83, 0x00),  # Testing with zero
+        # Add more test cases here
+    ]
+
+    for a, b, expected in test_cases:
+        result = galois_multiply(a, b)
+        assert result == expected, f"Failed for galois_multiply({a}, {b}): expected {expected}, got {result}"
+
+def test_split_key():
+    test_key = "0123456789ABCDEFFEDCBA98765432100011223344556677"
     
+    # Expected output (in little-endian format)
+    expected_even = [0x67452301, 0x98BADCFE, 0x33221100]  # Reversed order
+    expected_odd = [0xEFCDAB89, 0x10325476, 0x77665544]   # Reversed order
+
+    # Split the key using your function
+    even, odd = split_key(test_key)
+
+    # Compare the results
+    assert even == expected_even, f"Even words do not match. Expected {expected_even}, got {even}"
+    assert odd == expected_odd, f"Odd words do not match. Expected {expected_odd}, got {odd}"
+
+    print("Test passed: split_key function works correctly.")

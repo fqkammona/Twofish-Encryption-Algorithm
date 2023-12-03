@@ -79,24 +79,35 @@ def split_key(key):
     m_odd = [int.from_bytes(key_bytes[i:i+4], 'little') for i in range(4, len(key_bytes), 8)]
     return m_even, m_odd
 
+def rotl(x, r):
+    return ((x << r) | (x >> (32 - r))) & 0xFFFFFFFF
+
+def rotr(x, r):
+    return ((x >> r) | (x << (32 - r))) & 0xFFFFFFFF
+
+def rotr4(x, r):
+    return ((x >> r) | ((x & (1 << (r - 1))) << (4 - r))) & 0xF
+
 def rs_matrix_multiply(key_bytes):
     # Make sure the key bytes are in the correct format (list of integers)
     if isinstance(key_bytes, str):
         key_bytes = [int(key_bytes[i:i+2], 16) for i in range(0, len(key_bytes), 2)]
 
-    # Initialize the S-boxes
-    s_boxes = [0] * 4  # 4 32-bit S-boxes
+    # Initialize the S-boxes as a 4x8 matrix
+    s_boxes = [[0 for _ in range(8)] for _ in range(4)]  # 4 rows, 8 columns
 
-    # Perform RS matrix multiplication
+    #  RS matrix multiplication
     for i in range(4):  # 4 rows in RS matrix
         for j in range(8):  # 8 columns (key bytes)
-           # print(RS_matrix[i][j])
-           # print(key_bytes[j])
+            #print(RS_matrix[i][j])
+            #print(key_bytes[j])
             result = galois_multiply(RS_matrix[i][j], key_bytes[j])
-           # print(result)
-            s_boxes[i] ^= result
-            #print(s_boxes[i])
-        
+            #print(f"Here: {result}")
+            s_boxes[i][j] = result
+
+        # After each row is filled, print the row
+        print("Row", i, ":", s_boxes[i])
+
     return s_boxes
 
 '''Multiply two numbers in the GF(2^8) field. ''' 
@@ -110,7 +121,7 @@ def galois_multiply(a, b):
         a <<= 1
         if high_bit_set:
             a ^= 0x014D  # Reduction polynomial for RS matrix
-        a &= 0xFF  # Ensure a remains an 8-bit number
+        a &= 0xFF  # make sure a remains an 8-bit number
 
         b >>= 1
 
@@ -120,23 +131,45 @@ def h_function(input_value, key_portion, key_length, q_table, MDS_matrix):
     # Split input_value into 4 bytes
     input_bytes = [(input_value >> (8 * i)) & 0xFF for i in range(4)]
 
-    # Apply the q-tables and key bytes based on the key length
+    #  transformations with rotr4 and q-tables
+    transformed_bytes = [0] * 4
+    for i in range(4):
+        a0 = input_bytes[i] // 16
+        b0 = input_bytes[i] % 16
+        a1 = a0 ^ b0
+        b1 = rotr4(b0, 1) ^ (8 * a0) % 16
+
+        a2 = q_table[0][a1]
+        b2 = q_table[1][b1]
+        a3 = a2 ^ b2
+        b3 = rotr4(b2, 1) ^ (8 * a2) % 16
+
+        transformed_bytes[i] = 16 * q_table[1][b3] + q_table[0][a3]
+
+    # Apply the key portion based on the key length
     if key_length >= 4:
-        input_bytes = [
-            q_table[0 if i == 0 or i == 3 else 1][input_bytes[i]] ^ (key_portion[12 + i] if len(key_portion) > 12 + i else 0)
-            for i in range(4)
-        ]
+        transformed_bytes = [transformed_bytes[i] ^ (key_portion[i + 12] if i + 12 < len(key_portion) else 0) for i in range(4)]
 
     if key_length >= 3:
-        input_bytes = [
-            q_table[0 if i == 0 or i == 1 else 1][input_bytes[i]] ^ (key_portion[8 + i] if len(key_portion) > 8 + i else 0)
-            for i in range(4)
-        ]
+        transformed_bytes = [transformed_bytes[i] ^ (key_portion[i + 8] if i + 8 < len(key_portion) else 0) for i in range(4)]
+    
+    # more transformations with checks
+    input_bytes = []
+    for i in range(4):
+        key_index = i + 4
+        if key_index < len(key_portion):
+            # Calculate value for q_table indexing
+            intermediate_val = transformed_bytes[i] ^ key_portion[key_index]
+            # making sure q_table index within bounds
+            q_table_index = intermediate_val & 0xFF
+            temp = q_table[1 if i % 2 == 0 else 0][q_table[1 if i < 2 else 0][q_table_index]]
+        else:
+            q_table_index = transformed_bytes[i] & 0xFF
+            temp = q_table[1 if i % 2 == 0 else 0][q_table[1 if i < 2 else 0][q_table_index]]
 
-    input_bytes = [
-        q_table[1 if i % 2 == 0 else 0][q_table[1 if i < 2 else 0][input_bytes[i]] ^ (key_portion[4 + i] if len(key_portion) > 4 + i else 0)]
-        ^ (key_portion[i] if len(key_portion) > i else 0) for i in range(4)
-    ]
+        #  XOR with key_portion and making sure index is within bounds
+        temp ^= key_portion[i] if i < len(key_portion) else 0
+        input_bytes.append(temp)
 
     # MDS matrix multiplication
     mds_output = [0] * 4
@@ -144,20 +177,25 @@ def h_function(input_value, key_portion, key_length, q_table, MDS_matrix):
         for j in range(4):
             mds_output[i] ^= galois_multiply(MDS_matrix[i][j], input_bytes[j])
 
-    # puts mds_output into a 32-bit word
+    #  mds_output into a 32-bit word
     return sum(mds_output[i] << (8 * i) for i in range(4))
 
 
+
 def key_schedule(key, g_q, MDS_matrix):
-    key_length = len(key) // 8  # Determine key length in words (32-bit words)
+    key_length = len(key) // 8  # find key length in words (32-bit words)
     m_even, m_odd = split_key(key)
     s_boxes = rs_matrix_multiply(key)
     subkeys = [0] * 48  # Extend to 48 subkeys for whitening
 
     # Key-dependent S-boxes
     for i in range(min(4, len(m_even))):
-        s_boxes[i] = h_function(m_even[i], s_boxes, key_length, g_q, MDS_matrix)
+        s_box_row = h_function(m_even[i], s_boxes[i], key_length, g_q, MDS_matrix)
+        s_box_row &= 0xFFFFFFFF  # make sure 32-bit value
 
+        for j in range(4):  # Update only 4 bytes per row
+            s_boxes[i][j] = (s_box_row >> (8 * j)) & 0xFF
+              
     # Create the 40 round keys
     for i in range(20):
         # Round constants for even and odd subkeys
@@ -169,26 +207,24 @@ def key_schedule(key, g_q, MDS_matrix):
             subkeys[2 * i] = h_function(round_constant_even, m_even, key_length, g_q, MDS_matrix)
         if i < len(m_odd):
             subkeys[2 * i + 1] = h_function(round_constant_odd, m_odd, key_length, g_q, MDS_matrix)
-
-            # Rotate the odd subkey left by 8 bits
-            subkeys[2 * i + 1] = ((subkeys[2 * i + 1] << 8) & 0xFFFFFFFF) | (subkeys[2 * i + 1] >> 24)
+            subkeys[2 * i + 1] = rotl(subkeys[2 * i + 1], 8) 
 
     # Whitening subkeys
     for i in range(8):
-        if i < len(m_even):
-            subkeys[40 + i] = m_even[i % len(m_even)]
-        if i < len(m_odd):
-            subkeys[40 + i] = m_odd[i % len(m_odd)]
+        if i % 2 == 0 and i < len(m_even):
+            subkeys[40 + i] = m_even[i // 2]
+        elif i % 2 != 0 and i < len(m_odd):
+            subkeys[40 + i] = m_odd[i // 2]
 
     return s_boxes, subkeys
 
 def print_inputKey_Sboxes(m_even, m_odd, s_boxes):
     print("Input key\t\t\t\tS-Box Key")
     print("Odd\t\tEven")
-    for i in range(len(s_boxes)):
-        odd_hex = f"{m_odd[i]:08X}" if i < len(m_odd) else "--------"
-        even_hex = f"{m_even[i]:08X}" if i < len(m_even) else "--------"
-        s_box_hex = f"{s_boxes[i]:08X}" if i < len(s_boxes) else "--------"
+    for i in range(len(m_even)):  
+        odd_hex = f"{m_odd[i]:08X}"
+        even_hex = f"{m_even[i]:08X}"
+        s_box_hex = " ".join([f"{byte:02X}" for byte in s_boxes[i][:4]])
         print(f"{odd_hex}\t{even_hex} -> {s_box_hex}")
 
 def print_key_schedule(subkeys):
@@ -199,7 +235,7 @@ def print_key_schedule(subkeys):
 if __name__ == "__main__":
     key = input_from_user_key("Enter a hex string of 128, 192, or 256 bits in length: ")
     g_q = twofish_init()
-    m_even, m_odd = split_key(key)  # Assuming this gives you the split key parts
+    m_even, m_odd = split_key(key)  
     s_boxes, subkeys = key_schedule(key, g_q, MDS_matrix)
     print_inputKey_Sboxes(m_even, m_odd, s_boxes)
     print_key_schedule(subkeys)
