@@ -158,6 +158,12 @@ def galois_multiply(a, b):
 
 '''End of S-Box Generation Section '''
 
+
+
+
+''''STILL NEED TO COMMENT '''
+
+
 def h_function(input_value, key_portion, key_length, q_table):
     # Split input_value into 4 bytes
     input_bytes = [(input_value >> (8 * i)) & 0xFF for i in range(4)]
