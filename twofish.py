@@ -159,95 +159,125 @@ def galois_multiply(a, b):
 '''End of S-Box Generation Section '''
 
 
+'''Everything with H_function Section'''
 
+def permutation_q(input_byte, q_table):
+    '''This function is the Permutations q0 and q1'''
+    # Split the input byte into two 4-bit parts
+    a0, b0 = input_byte // 16, input_byte % 16 # ⌊x/16⌋, x mod 16
 
-''''STILL NEED TO COMMENT '''
+    a1 = a0 ^ b0 # a0 XOR b0
+    b1 = rotr4(b0, 1) ^ (8 * a0) % 16 # a0 XOR ROR4(b0,1) XOR 8a0mod16
 
+    # Use the q_table with the results of the first operations to get new values
+    a2, b2 = q_table[0][a1], q_table[1][b1]
+
+    a3 = a2 ^ b2 # a2 XOR b2
+    b3 = rotr4(b2, 1) ^ (8 * a2) % 16 # a2 XOR ROR4(b2,1) XOR 8a2mod16
+
+    # Combine the final values to get the transformed byte
+    transformed_byte = 16 * q_table[1][b3] + q_table[0][a3]
+
+    return transformed_byte
+
+def mds_matrix_multiply(transformed_bytes, MDS_matrix):
+    '''This function performs matrix multiplication using a predefined MDS matrix (maximum distance separable)
+    and a set of bytes that have been transformed. '''
+    mds_output = [0] * 4  # hold the MDS matrix multiplication result
+    for i in range(4):  # Goes over each element of the result
+        for j in range(4):  # Goes over each byte in the transformed_bytes
+            # Perform GF multiplication and XOR the result with the current value of mds_output[i]
+            mds_output[i] ^= galois_multiply(MDS_matrix[i][j], transformed_bytes[j])
+    # Combine the 4 bytes into a single integer by shifting and summing
+    return sum(mds_output[i] << (8 * i) for i in range(4))  # Return the combined integer
 
 def h_function(input_value, key_portion, key_length, q_table):
-    # Split input_value into 4 bytes
-    input_bytes = [(input_value >> (8 * i)) & 0xFF for i in range(4)]
+    '''This function splits the data into bytes, transforming those bytes
+      through a bunch of XOR operations and lookup tables, and 
+      combines them with parts of the encryption key'''
+    input_bytes = [(input_value >> (8 * i)) & 0xFF for i in range(4)] # Split the 32-bit input_value into four separate bytes
+    transformed_bytes = [None] * 4 # Initialize a list to hold the transformed bytes after permutation
+  
+    for i in range(4): # Do the permutation 
+        transformed_bytes[i] = permutation_q(input_bytes[i], q_table)
 
-    # Initialize transformed_bytes
-    transformed_bytes = [0] * 4
-    for i in range(4):
-        a0 = input_bytes[i] // 16
-        b0 = input_bytes[i] % 16
-        a1 = a0 ^ b0
-        b1 = rotr4(b0, 1) ^ (8 * a0) % 16
-
-        a2 = q_table[0][a1]
-        b2 = q_table[1][b1]
-        a3 = a2 ^ b2
-        b3 = rotr4(b2, 1) ^ (8 * a2) % 16
-
-        transformed_bytes[i] = 16 * q_table[1][b3] + q_table[0][a3]
-
-    # Apply the key portion based on the key length
-    if key_length >= 4:
+    if key_length == 4: #  XOR the transformed bytes with the corresponding key portion (even or odd)
         transformed_bytes = [transformed_bytes[i] ^ (key_portion[i + 12] if i + 12 < len(key_portion) else 0) for i in range(4)]
 
-    if key_length >= 3:
+    if key_length >= 3:  # XOR the transformed bytes with the next key portion
         transformed_bytes = [transformed_bytes[i] ^ (key_portion[i + 8] if i + 8 < len(key_portion) else 0) for i in range(4)]
     
-    # Final transformation with checks
-    final_bytes = []
-    for i in range(4):
-        key_index = i + 4
+    final_bytes = [] # list to hold the final transformed bytes after the complete transformation
+    for i in range(4): # Final Transformation
+        key_index = i + 4  # Determine the appropriate index for the key portion(depending on even or odd)
         if key_index < len(key_portion):
             intermediate_val = transformed_bytes[i] ^ key_portion[key_index]
             q_table_index = intermediate_val & 0xFF
             temp = q_table[1 if i % 2 == 0 else 0][q_table[1 if i < 2 else 0][q_table_index]]
-        else:
+        else:  # If the key index is out of bounds then only do permutations to the transformed bytes
             q_table_index = transformed_bytes[i] & 0xFF
             temp = q_table[1 if i % 2 == 0 else 0][q_table[1 if i < 2 else 0][q_table_index]]
+        # XOR the temp value with the key portion if available and update the result to final_bytes
         temp ^= key_portion[i] if i < len(key_portion) else 0
         final_bytes.append(temp)
 
     return final_bytes
 
-def mds_matrix_multiply(transformed_bytes, MDS_matrix):
-    mds_output = [0] * 4
-    for i in range(4):
-        for j in range(4):
-            mds_output[i] ^= galois_multiply(MDS_matrix[i][j], transformed_bytes[j])
 
-    return sum(mds_output[i] << (8 * i) for i in range(4))
+'''End of Everything with H_function Section'''
 
-def key_schedule_setup(key, g_q, MDS_matrix):
+'''Everything Needed for Creating Round Key Section'''
+
+def create_round_keys(m_even, m_odd, key_length, g_q, MDS_matrix):
+    '''This function creates the round keys '''
+    round_keys = [0] * 40  # Initialize 40 arrays to store the round keys
+
+    for i in range(20): # Go over 20 times to generate 40 keys (2 keys per iteration)
+        # Calculate round constants for even and odd values
+        round_constant_even = 2 * i * 0x01010101
+        round_constant_odd = (2 * i + 1) * 0x01010101
+
+        if i < len(m_even): # If index is in the range of m_ever then create the even round key 
+            transformed_bytes = h_function(round_constant_even, m_even, key_length, g_q) # call h_function for evven 
+            round_keys[2 * i] = mds_matrix_multiply(transformed_bytes, MDS_matrix) # Multiply the result by MDS & store it
+
+        if i < len(m_odd): # If index is in the range of m_odd then create the odd round key 
+            transformed_bytes = h_function(round_constant_odd, m_odd, key_length, g_q) # call h_function for odd 
+            round_keys[2 * i + 1] = mds_matrix_multiply(transformed_bytes, MDS_matrix) # Multiply the result by MDS & store it
+            round_keys[2 * i + 1] = rotl(round_keys[2 * i + 1], 8) #  do left circular bit rotation by 8
+
+    return round_keys
+
+def create_whitening_keys(m_even, m_odd):
+    '''This function s creating an array of whitening keys using the even and odd key parts. 
+    It then alternates between these two arrays to fill the whitening keys. '''
+    # Reasons for whiting is to increase the security of a cipher by adding additional randomness to the 
+    # encryption and decryption processes. 
+
+    whitening_keys = [0] * 8  # Initialize whitening keys
+    for i in range(8):  # Iterate over the indices for the whitening keys
+        if i % 2 == 0 and i < len(m_even):  # Check if 'i' is even and is not greater then the length of m_odd 
+            whitening_keys[i] = m_even[i // 2]  # Assign the value from m_even to the whitening key
+       
+        elif i % 2 != 0 and i < len(m_odd):  # Check if 'i' is odd and is not greater then the length of m_odd 
+            whitening_keys[i] = m_odd[i // 2]  # Assign the value from m_odd to the whitening key
+    return whitening_keys 
+
+
+'''End of Everything Needed for Creating Round Key Section'''
+
+'''This section handels all aspects of key scheduling '''
+
+def key_schedule_sBox_Generation(key):
+    '''This function does everthing needed for the sBox generation section'''
     key_length = len(key) // 8  # Key length in words (32-bit words)
     m_even, m_odd = split_key(key)  # Split the key into even and odd parts
     s_boxes = rs_matrix_multiply(key)  # Generate S-boxes
     return key_length, m_even, m_odd, s_boxes
 
-def create_round_keys(m_even, m_odd, key_length, g_q, MDS_matrix):
-    round_keys = [0] * 40  # Initialize round keys
-    for i in range(20):
-        round_constant_even = 2 * i * 0x01010101
-        round_constant_odd = (2 * i + 1) * 0x01010101
-
-        if i < len(m_even):
-            transformed_bytes = h_function(round_constant_even, m_even, key_length, g_q)
-            round_keys[2 * i] = mds_matrix_multiply(transformed_bytes, MDS_matrix)
-
-        if i < len(m_odd):
-            transformed_bytes = h_function(round_constant_odd, m_odd, key_length, g_q)
-            round_keys[2 * i + 1] = mds_matrix_multiply(transformed_bytes, MDS_matrix)
-            round_keys[2 * i + 1] = rotl(round_keys[2 * i + 1], 8)
-
-    return round_keys
-
-def create_whitening_keys(m_even, m_odd):
-    whitening_keys = [0] * 8  # Initialize whitening keys
-    for i in range(8):
-        if i % 2 == 0 and i < len(m_even):
-            whitening_keys[i] = m_even[i // 2]
-        elif i % 2 != 0 and i < len(m_odd):
-            whitening_keys[i] = m_odd[i // 2]
-    return whitening_keys
 
 def key_schedule(key, g_q, MDS_matrix):
-    key_length, m_even, m_odd, s_boxes = key_schedule_setup(key, g_q, MDS_matrix)
+    key_length, m_even, m_odd, s_boxes = key_schedule_sBox_Generation(key)
     round_keys = create_round_keys(m_even, m_odd, key_length, g_q, MDS_matrix)
     whitening_keys = create_whitening_keys(m_even, m_odd)
 
@@ -255,10 +285,12 @@ def key_schedule(key, g_q, MDS_matrix):
     subkeys = round_keys + whitening_keys
     return s_boxes, subkeys
 
+'''End of section handels all aspects of key scheduling '''
+
+'''Printing Section'''
 
 def print_inputKey_Sboxes(m_even, m_odd, s_boxes):
     print("Input key\t\t\t\tS-Box Key")
-    print("Odd\t\tEven")
     for i in range(len(m_even)):  
         odd_hex = f"{m_odd[i]:08X}"
         even_hex = f"{m_even[i]:08X}"
@@ -269,6 +301,9 @@ def print_key_schedule(subkeys):
     print("\nRound subkeys:")
     for i in range(0, 40, 2):
         print(f"K{i}: {subkeys[i]:08X}, K{i+1}: {subkeys[i+1]:08X}")
+
+'''End of Printing Section'''
+
 
 if __name__ == "__main__":
     key = input_from_user_key("Enter a hex string of 128, 192, or 256 bits in length: ")

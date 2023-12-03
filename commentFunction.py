@@ -93,3 +93,38 @@ def rs_matrix_multiply(key_bytes):
             s_boxes[i][j] = result # Store the result in the S-boxes matrix
 
     return s_boxes
+
+def permutation_q(input_byte, q_table):
+    '''This function is the Permutations q0 and q1'''
+    # Split the input byte into two 4-bit parts
+    a0, b0 = input_byte // 16, input_byte % 16 # ⌊x/16⌋, x mod 16
+
+    a1 = a0 ^ b0 # a0 XOR b0
+    b1 = rotr4(b0, 1) ^ (8 * a0) % 16 # a0 XOR ROR4(b0,1) XOR 8a0mod16
+
+    # Use the q_table with the results of the first operations to get new values
+    a2, b2 = q_table[0][a1], q_table[1][b1]
+
+    a3 = a2 ^ b2 # a2 XOR b2
+    b3 = rotr4(b2, 1) ^ (8 * a2) % 16 # a2 XOR ROR4(b2,1) XOR 8a2mod16
+
+    # Combine the final values to get the transformed byte
+    transformed_byte = 16 * q_table[1][b3] + q_table[0][a3]
+
+    return transformed_byte
+
+
+def create_whitening_keys(m_even, m_odd):
+    '''This function s creating an array of whitening keys using the even and odd key parts. 
+    It then alternates between these two arrays to fill the whitening keys. '''
+    # Reasons for whiting is to increase the security of a cipher by adding additional randomness to the 
+    # encryption and decryption processes. 
+
+    whitening_keys = [0] * 8  # Initialize whitening keys
+    for i in range(8):  # Iterate over the indices for the whitening keys
+        if i % 2 == 0 and i < len(m_even):  # Check if 'i' is even and is not greater then the length of m_odd 
+            whitening_keys[i] = m_even[i // 2]  # Assign the value from m_even to the whitening key
+       
+        elif i % 2 != 0 and i < len(m_odd):  # Check if 'i' is odd and is not greater then the length of m_odd 
+            whitening_keys[i] = m_odd[i // 2]  # Assign the value from m_odd to the whitening key
+    return whitening_keys 
